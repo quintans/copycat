@@ -1,0 +1,8 @@
+projectName: MyApp
+features:
+  - name: auth
+    table: auths
+  - name: payments
+    table: payments
+owner:
+  name: Alice
