@@ -1,91 +1,210 @@
 # copycat
 
-A small Go utility to copy a template folder into a new location, expanding folder and file names that contain `{{ ... }}` expressions based on a YAML model. File contents are also rendered using Go text/templates.
+A Go template engine that expands directory structures and files using YAML models. Generate customized project scaffolds by processing template directories with Go template syntax and placeholder variables.
 
 ## Features
 
-- Expand folder/file names using `{{ ... }}` expressions that reference your model.
-- If an expression resolves to an array, the path segment is expanded into multiple entries (one per element), and that element becomes the context for inner paths and file contents.
-- Works for any `{{ ... }}` expression from your YAML model (not just `features.name`).
-- Supports scalar model fields like `projectName` for single-file/folder generation.
-- Renders file contents with Go `text/template` and [sprig] functions.
-- **Smart empty handling**: Files that render to empty content are automatically skipped, and empty directories are removed.
-- **Empty array support**: Arrays with no elements result in no folders/files being created for that path segment.
-- Dry-run mode prints what would be generated without writing.
+- **Path Expansion**: Directory and file names with `{{ variableName }}` placeholders
+- **Array Iteration**: Create multiple outputs from single templates using array data
+- **Context Switching**: Access both current array element and root model data
+- **Smart Cleanup**: Automatically removes empty files and directories
+- **Dry Run Mode**: Preview changes without writing files
+- **Filesystem Abstraction**: Works with real filesystems or in-memory for testing
 
-## Install
+## Installation
 
-Build the binary:
-
-```
-go build -o copycat .
+```bash
+go install github.com/quintans/copycat@latest
 ```
 
-## Usage
+Or clone and build:
 
+```bash
+git clone https://github.com/quintans/copycat.git
+cd copycat
+go build -o copycat main.go
 ```
-./copycat --model model.yaml --template template_dir --out out_dir [--dry-run]
-```
 
-- `--model`: Path to YAML model
-- `--template`: Path to input template directory
-- `--out`: Output directory to write generated files
-- `--dry-run`: Only print planned operations
+## Quick Start
 
-## Template rules
+1. Create a YAML model file:
 
-- Path segments may include `{{ ... }}`. Examples:
-  - `cmd/{{ projectName }}.go.tmpl` → becomes `cmd/myproj.go`
-  - `pkg/{{ features.name }}/index.go.tmpl` → expands to one folder per feature name
-- If a segment’s expression evaluates to an array, we expand that segment into multiple entries; the element becomes the current context for nested segments and file contents.
-- File contents are rendered via Go templates. The template dot (`.`) is the current context (the array element during expansions, or the root model when not inside an expanded segment).
-- Helper functions available inside templates:
-  - `root` → returns the root model (use fields like `{{ (root).projectName }}` or `{{ root.projectName }}`)
-  - `.` → returns the current context
-  - Plus the full [sprig] function set.
-
-Tip: Suffix content templates with `.tmpl`; the tool will strip `.tmpl` in the output file name.
-
-## Example
-
-Model (`examples/model.yaml`):
-
-```
-projectName: demoapp
+```yaml
+# model.yaml
+projectName: MyApp
 features:
-  - name: users
+  - name: auth
     table: users
-  - name: orders
-    table: orders
+  - name: payments
+    table: invoices
+owner:
+  name: Alice
 ```
 
-Template (`examples/template2`):
-
-- `README.txt`
-- `pkg/{{ features.name }}/index.go.tmpl`
-
-Run dry-run:
+2. Create a template directory structure:
 
 ```
-./copycat --model examples/model.yaml --template examples/template2 --out ./out --dry-run
+template/
+└── {{ projectName }}/
+    ├── README.md
+    └── {{ features.name }}/
+        ├── {{ name }}.go.tmpl
+        └── config.txt
 ```
 
-Expected output:
+3. Run copycat:
 
-- `MKDIR ./out/pkg/users`
-- `WRITE ./out/pkg/users/index.go`
-- `MKDIR ./out/pkg/orders`
-- `WRITE ./out/pkg/orders/index.go`
+```bash
+copycat -model model.yaml -template template -out output
+```
 
-Empty files will show as `SKIP filename (empty after rendering)` in dry-run mode.
+4. Generated output:
 
-Then run the actual generation (omit `--dry-run`).
+```
+output/
+└── MyApp/
+    ├── README.md
+    ├── auth/
+    │   ├── auth.go
+    │   └── config.txt
+    └── payments/
+        ├── payments.go
+        └── config.txt
+```
 
-## Notes
+## Template Syntax
 
-- The model and template directory are not known at compile-time; the tool loads them at runtime.
-- Nested arrays in a single path segment create a cartesian expansion only within that segment; inner segments use the current element as context, not cartesian across unrelated parts of the model.
-- **Empty content handling**: Files that render to only whitespace are automatically skipped. Directories that become empty (due to all files being skipped) are automatically removed.
-- **Empty arrays**: When a path expression resolves to an empty array, no files or directories are created for that expansion branch.
+### Path Placeholders
 
-[sprig]: https://github.com/Masterminds/sprig
+Use `{{ variableName }}` in directory and file names:
+
+- `{{ projectName }}` → expands to scalar value
+- `{{ features.name }}` → creates multiple directories from array
+> NB: `features` is an array that we defined above in the model
+
+### Template Content
+
+Inside template files, use Go template syntax:
+
+```go
+package {{ .name }}
+
+// Project: {{ (root).projectName }}
+// Feature: {{ .name }}
+
+func TableName() string {
+    return "{{ .table }}"
+}
+```
+
+> files ctemplates can have the extension `.tmpl`, that will be removed on generation
+
+### Context Access
+
+- `{{ . }}` - Current context (array element or root model)
+- `{{ (root) }}` - Always accesses the full YAML model
+- All [Sprig template functions](https://masterminds.github.io/sprig/) available
+
+## CLI Options
+
+```bash
+copycat [options]
+
+Required:
+  -model string     Path to YAML model file
+  -template string  Path to template directory
+  -out string       Output directory path
+
+Optional:
+  -dry-run         Preview actions without writing files
+```
+
+## Examples
+
+The `examples/` directory contains a complete working example:
+
+```bash
+# Preview the example
+go run main.go -model examples/model.yaml -template examples/template -out ./output -dry-run
+
+# Generate actual files
+go run main.go -model examples/model.yaml -template examples/template -out ./output
+```
+
+## Template Features
+
+### Array Iteration
+
+When a path contains `{{ array.field }}`, copycat creates separate outputs for each array element:
+
+```yaml
+# model.yaml
+features:
+  - name: auth
+    table: users
+  - name: billing
+    table: invoices
+```
+
+```
+template/{{ features.name }}/{{ name }}.go.tmpl
+```
+
+Generates:
+- `auth/auth.go`
+- `billing/billing.go`
+
+### Smart Cleanup
+
+- Files that render to empty content are not created. Pre-existing file will be removed
+- Empty directories automatically removed
+- Pre-existing directories and files are preserved
+
+## Library Usage
+
+Use copycat as a Go library:
+
+```go
+package main
+
+import (
+    "github.com/spf13/afero"
+    "github.com/quintans/copycat"
+)
+
+func main() {
+    model := map[string]any{
+        "projectName": "MyApp",
+        "features": []any{
+            map[string]any{"name": "auth"},
+        },
+    }
+    
+    inFS := afero.NewOsFs()
+    outFS := afero.NewOsFs()
+    
+    err := copycat.ProcessDir(inFS, "template", outFS, "output", model, model, false)
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+## Development
+
+### Prerequisites
+
+- Go 1.25.1 or later
+
+### Running Tests
+
+```bash
+go test -v
+```
+
+### Dependencies
+
+- `github.com/spf13/afero` - Filesystem abstraction
+- `github.com/go-task/slim-sprig/v3` - Template functions
+- `gopkg.in/yaml.v3` - YAML parsing
+- `github.com/quintans/faults` - Error handling

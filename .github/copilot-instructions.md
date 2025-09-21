@@ -1,124 +1,98 @@
-# Copycat Project - AI Assistant Instructions
+# Copilot Instructions for copycat
 
 ## Project Overview
 
-`copycat` is a Go template expansion utility that copies directories while dynamically expanding folder/file names and content based on YAML models. The core concept is **context-aware template expansion** where array fields in the model create multiple instances with each array element becoming the rendering context.
+copycat is a Go template engine that expands directory structures and files using YAML models. It processes template directories with Go template syntax and placeholder variables to generate customized project scaffolds.
 
-## Architecture & Key Components
+**Key Architecture:**
+- Single binary CLI tool with three main functions: model loading, template processing, and file generation
+- Uses `afero.Fs` abstraction for filesystem operations (enables in-memory testing)
+- Template expansion supports both scalar replacements and array iteration with context switching
+- Main processing happens in `ProcessDir()` which recursively walks template directories
 
-### Core Flow
-1. **Model Loading**: YAML model loaded into `map[string]any` with type normalization
-2. **Template Walking**: Recursive directory traversal processes each path segment
-3. **Path Expansion**: `{{ ... }}` expressions in paths create multiple outputs when resolving to arrays
-4. **Context Propagation**: Array elements become the template context (`.`) for nested paths and file content
-5. **Content Rendering**: Files are rendered using Go `text/template` with sprig functions
-6. **Empty Content Cleanup**: Empty files are skipped and empty directories are removed automatically
+## Core Template System
 
-### Key Functions
-- `expandPathSegment()`: Core logic for path expansion and context switching
-- `evaluatePathNodes()`: Broadcasts field access across arrays while preserving element context
-- `renderContent()`: Renders file templates with current context as `.` and root model via `(root)`
-- `removeEmptyDirs()`: Post-processing cleanup that removes directories left empty after file skipping
+**Path Expansion Pattern (`{{ variableName }}`):**
+- Directory/file names with `{{ features.name }}` create multiple outputs from arrays
+- Each array element becomes a new directory with that element as template context
+- Example: `{{ features.name }}/{{ name }}.go.tmpl` → `auth/auth.go`, `payments/payments.go`
 
-## Template System Conventions
+**Template Context System:**
+- `{{ . }}` refers to current context (could be array element or root model)
+- `{{ (root) }}` helper function always accesses the full YAML model
+- Context switches when iterating through arrays in path names
 
-### Path Expressions
-- Use `{{ features.name }}` to expand one directory/file per feature
-- Use `{{ projectName }}` for scalar values that don't expand
-- Expressions resolve relative to current context first, then root model
-- Arrays in path segments create multiplicative expansion (one path per element)
-- **Empty arrays result in no expansion** - no files or directories are created for that branch
-- **Empty files are automatically skipped** - content that renders to only whitespace is not written
-
-### Template Functions in Content
-- `(root)` or `root`: Access root YAML model from any context
-- `.`: Access current context
-- Full sprig function library available
-- Example: `{{ (root).projectName }}` or `{{ root.projectName }}` gets project name from any nested context
-
-### File Naming
-- Template files should end in `.tmpl` (automatically stripped in output)
-- Non-template files are copied as-is but names can still contain expressions
+**File Processing Rules:**
+- `.tmpl` suffix is automatically stripped from output filenames
+- Empty files after template rendering are skipped (not created)
+- Empty directories are automatically removed after processing
 
 ## Development Workflows
 
-### Testing Template Expansion
+**Testing with Examples:**
 ```bash
-# Always use dry-run first to verify expansion logic
-./copycat --model examples/model.yaml --template examples/template --out ./test-output --dry-run
+# Run with the provided example
+go run main.go -model examples/model.yaml -template examples/template -out ./output -dry-run
 
-# Then run actual generation
-./copycat --model examples/model.yaml --template examples/template --out ./test-output
+# Run actual tests
+go test -v
 ```
 
-### Building and Running
-```bash
-go build -o copycat .
-./copycat --model <model.yaml> --template <template_dir> --out <output_dir>
-```
+**Key Test Patterns:**
+- Use `afero.NewMemMapFs()` for in-memory filesystem testing
+- Test both dry-run and actual file creation modes
+- Verify context switching in array iterations (see `TestExpandPathSegmentArray`)
+- Test empty file/directory cleanup behavior
 
-## Project-Specific Patterns
+## Project-Specific Conventions
 
-### Model Structure Expectations
-- Root-level scalar fields (e.g., `projectName`, `owner.name`) for project-wide values
-- Array fields (e.g., `features[]`) for generating multiple similar structures
-- Each array element should have consistent field structure for template rendering
+**Error Handling:**
+- Use `github.com/quintans/faults` for error wrapping, not standard errors
+- Fatal errors use `noError()` helper which calls `fatalf()` and `os.Exit(1)`
+- Template parsing errors should include context about which file failed
 
-### Template Organization
-- Templates follow the pattern: `{{ projectName }}/{{ features.name }}/{{ name }}.go.tmpl`
-- This creates: one project dir → multiple feature dirs → multiple files per feature
-- Context flows: root → feature element → feature element (for inner expressions)
+**Template Function Extensions:**
+- Sprig functions are available via `github.com/go-task/slim-sprig/v3`
+- Custom `root()` function provides access to full model from any context
+- Use `missingkey=error` option to fail fast on undefined variables
 
-### Empty Content Handling
-- Files that render to empty content (after `strings.TrimSpace()`) are automatically skipped
-- Directories that become empty after file skipping are removed via `removeEmptyDirs()`
-- Empty arrays in path expressions result in no expansion (no files/directories created)
-- Dry-run mode shows `SKIP filename (empty after rendering)` for skipped files
+**Filesystem Abstraction:**
+- Always use `afero.Fs` interface, never direct `os` package calls
+- `ProcessDir()` is public API for integration with other tools
+- Support both real filesystem and in-memory for testing
 
-### Error Handling Strategy
-- Uses `github.com/quintans/faults` for error wrapping with stack traces
-- Fail fast on invalid models, missing templates, or filesystem errors
-- Template rendering errors include file context for debugging
+## Key Files and Patterns
 
-## Dependencies & External Integration
+**main.go** - Contains all core logic:
+- `LoadModel()`: YAML unmarshaling into `map[string]any`
+- `ProcessDir()`: Recursive template processing with context switching
+- `expandPath()`: Path placeholder expansion with array iteration
+- `renderContent()`: Go template rendering with sprig + custom functions
 
-### Key Dependencies
-- `gopkg.in/yaml.v3`: YAML model parsing with flexible type handling
-- `github.com/Masterminds/sprig/v3`: Template function library
-- `github.com/quintans/faults`: Enhanced error handling with stack traces
+**main_test.go** - Comprehensive test coverage:
+- `TestProcessDirWithExamples()`: Full integration test using real example data
+- `TestExpandPath*()`: Path expansion and context switching verification
+- `TestRenderContentWithContext()`: Template rendering with context access
+- `TestDryRunMode()`: Verification that dry-run creates no files
 
-### Integration Points
-- **Input**: YAML model files define expansion data
-- **Input**: Template directories with `{{ ... }}` expressions in paths/content
-- **Output**: Generated directory structures with expanded content
-- **CLI**: Standard flag-based interface for model, template, output paths
+**examples/** - Working template system demonstrating all features:
+- `model.yaml`: Sample data model with arrays and nested objects
+- `template/{{ projectName }}/`: Shows directory name templating
+- `{{ features.name }}/{{ name }}.go.tmpl`: Demonstrates array iteration with context switching
 
-## Critical Implementation Details
+## Integration Points
 
-### Type Normalization
-The `normalize()` function converts YAML's `map[any]any` to `map[string]any` recursively - essential for consistent template evaluation.
+**External Dependencies:**
+- `spf13/afero`: Filesystem abstraction layer
+- `go-task/slim-sprig/v3`: Template helper functions
+- `gopkg.in/yaml.v3`: YAML model parsing
+- `quintans/faults`: Enhanced error handling
 
-### Context Switching
-When `{{ features.name }}` expands in a path, each resulting path uses that feature element as the template context (`.`), not the root model. This enables `{{ .table }}` to access the current feature's table field.
+**CLI Interface:**
+- Required: `-model`, `-template`, `-out` flags
+- Optional: `-dry-run` for preview mode
+- Exit codes: 0 success, 1 any error
 
-**Critical Fix**: Single-node path expressions now properly propagate context changes by treating them as single-element lists rather than scalars.
-
-### Expression Evaluation Order
-1. Try structured path traversal with context mapping (`evaluatePathNodes`)
-2. Fall back to full template rendering with sprig functions
-3. Root model always accessible via helper functions regardless of current context
-
-### Empty Content Processing
-1. All files are rendered through `renderContent()` regardless of template status
-2. Files with empty content (after whitespace trimming) are skipped
-3. Empty directories are removed in post-processing using bottom-up traversal
-
-## When Contributing
-
-- Follow the Go instruction file at `.github/instructions/go.instructions.md`
-- Test expansions with both scalar and array model fields
-- Verify context propagation through nested template expressions
-- Use dry-run mode extensively during development
-- **Test empty content scenarios**: Verify empty files are skipped and empty directories are removed
-- **Validate edge cases**: empty arrays, missing fields, deeply nested structures, mixed empty/non-empty content
-- Use testify `require` for critical assertions and `assert` for validation checks
+**Public API:**
+- `ProcessDir()` function can be imported and used by other Go programs
+- Accepts `afero.Fs` interfaces for custom filesystem implementations
