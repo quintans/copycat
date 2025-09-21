@@ -54,7 +54,7 @@ func main() {
 	}
 
 	// Walk the template directory and process entries depth-first.
-	createdDirs := make(map[string]bool)
+	createdDirs := make(map[string]struct{})
 	err = processDir(*templateRoot, "", *outRoot, "", model, model, *dryRun, createdDirs)
 	if err != nil {
 		fatalf("processing failed: %+v", err)
@@ -71,7 +71,7 @@ func main() {
 
 // removeEmptyCreatedDirs removes only directories that were created during this copycat run
 // and have become empty after file processing.
-func removeEmptyCreatedDirs(createdDirs map[string]bool) error {
+func removeEmptyCreatedDirs(createdDirs map[string]struct{}) error {
 	// Convert map to slice and sort by depth (deepest first)
 	var dirs []string
 	for dir := range createdDirs {
@@ -152,12 +152,7 @@ func normalize(v any) any {
 }
 
 // processDir processes the template directory at rel path, creating outputs under outRoot.
-// relFromTemplate: relative path from templateRoot to current processing dir
-// outRoot: absolute or relative path to output base dir
-// rootModel: full model available via $.Model in templates
-// ctx: current context object (can be rootModel or an element during expansions)
-// createdDirs: map to track directories created during this run
-func processDir(templateRoot string, srcRel string, outRoot string, outRel string, rootModel map[string]any, ctx any, dry bool, createdDirs map[string]bool) error {
+func processDir(templateRoot string, srcRel string, outRoot string, outRel string, rootModel map[string]any, ctx any, dry bool, createdDirs map[string]struct{}) error {
 	currentTemplatePath := filepath.Join(templateRoot, srcRel)
 
 	entries, err := os.ReadDir(currentTemplatePath)
@@ -192,7 +187,7 @@ func processDir(templateRoot string, srcRel string, outRoot string, outRel strin
 					for _, part := range pathParts {
 						if part != "" {
 							currentPath = filepath.Join(currentPath, part)
-							createdDirs[currentPath] = true
+							createdDirs[currentPath] = struct{}{}
 						}
 					}
 				}
@@ -241,7 +236,7 @@ func processDir(templateRoot string, srcRel string, outRoot string, outRel strin
 						for _, part := range pathParts {
 							if part != "" {
 								currentPath = filepath.Join(currentPath, part)
-								createdDirs[currentPath] = true
+								createdDirs[currentPath] = struct{}{}
 							}
 						}
 					}

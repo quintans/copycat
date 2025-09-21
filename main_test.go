@@ -514,11 +514,11 @@ func TestRemoveEmptyDirs(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate tracking only some directories as "created by copycat"
-	createdDirs := map[string]bool{
-		emptyDir:                         true, // This empty dir should be removed
-		nonEmptyDir:                      true, // This non-empty dir should remain
-		nestedEmptyDir:                   true, // This empty dir should be removed
-		filepath.Join(tempDir, "nested"): true, // Parent should also be removed when child is gone
+	createdDirs := map[string]struct{}{
+		emptyDir:                         {}, // This empty dir should be removed
+		nonEmptyDir:                      {}, // This non-empty dir should remain
+		nestedEmptyDir:                   {}, // This empty dir should be removed
+		filepath.Join(tempDir, "nested"): {}, // Parent should also be removed when child is gone
 		// Note: preExistingEmpty is NOT in createdDirs, so should not be touched
 	}
 
@@ -577,7 +577,7 @@ func TestPreExistingDirectoryPreservation(t *testing.T) {
 
 	// Run copycat
 	model := map[string]any{"projectName": "TestProject"}
-	createdDirs := make(map[string]bool)
+	createdDirs := make(map[string]struct{})
 	err = processDir(templateDir, "", outputDir, "", model, model, false, createdDirs)
 	require.NoError(t, err)
 
@@ -641,7 +641,7 @@ func TestEndToEndEmptyDirRemoval(t *testing.T) {
 
 	// Run copycat with this test template
 	outputDir := filepath.Join(tempDir, "output")
-	createdDirs := make(map[string]bool)
+	createdDirs := make(map[string]struct{})
 	err = processDir(templateDir, "", outputDir, "", model, model, false, createdDirs)
 	require.NoError(t, err)
 
