@@ -578,7 +578,7 @@ func TestPreExistingDirectoryPreservation(t *testing.T) {
 	// Run copycat
 	model := map[string]any{"projectName": "TestProject"}
 	createdDirs := make(map[string]struct{})
-	err = processDir(templateDir, "", outputDir, "", model, model, false, createdDirs)
+	err = processDir(templateDir, outputDir, model, model, false, createdDirs)
 	require.NoError(t, err)
 
 	err = removeEmptyCreatedDirs(createdDirs)
@@ -642,7 +642,7 @@ func TestEndToEndEmptyDirRemoval(t *testing.T) {
 	// Run copycat with this test template
 	outputDir := filepath.Join(tempDir, "output")
 	createdDirs := make(map[string]struct{})
-	err = processDir(templateDir, "", outputDir, "", model, model, false, createdDirs)
+	err = processDir(templateDir, outputDir, model, model, false, createdDirs)
 	require.NoError(t, err)
 
 	// Remove empty directories

@@ -53,9 +53,17 @@ func main() {
 		fatalf("template path must be a directory")
 	}
 
+	// Ensure output directory exists (or would exist in dry-run mode)
+	if *dryRun {
+		fmt.Printf("DRY-RUN: would ensure output dir %s exists\n", *outRoot)
+	} else {
+		if err := os.MkdirAll(*outRoot, 0o755); err != nil {
+			fatalf("failed to create output dir: %+v", err)
+		}
+	}
 	// Walk the template directory and process entries depth-first.
 	createdDirs := make(map[string]struct{})
-	err = processDir(*templateRoot, "", *outRoot, "", model, model, *dryRun, createdDirs)
+	err = processDir(*templateRoot, *outRoot, model, model, *dryRun, createdDirs)
 	if err != nil {
 		fatalf("processing failed: %+v", err)
 	}
@@ -152,9 +160,7 @@ func normalize(v any) any {
 }
 
 // processDir processes the template directory at rel path, creating outputs under outRoot.
-func processDir(templateRoot string, srcRel string, outRoot string, outRel string, rootModel map[string]any, ctx any, dry bool, createdDirs map[string]struct{}) error {
-	currentTemplatePath := filepath.Join(templateRoot, srcRel)
-
+func processDir(currentTemplatePath string, currentOutPath string, rootModel map[string]any, ctx any, dry bool, createdDirs map[string]struct{}) error {
 	entries, err := os.ReadDir(currentTemplatePath)
 	if err != nil {
 		return faults.Wrap(err)
@@ -169,11 +175,10 @@ func processDir(templateRoot string, srcRel string, outRoot string, outRel strin
 			return faults.Errorf("expand segment %q: %w", name, err)
 		}
 		for _, seg := range expanded {
-			srcPath := filepath.Join(templateRoot, srcRel, name)
+			srcPath := filepath.Join(currentTemplatePath, name)
 
 			if entry.IsDir() {
-				newOutRel := filepath.Join(outRel, seg.Rendered)
-				targetOutPath := filepath.Join(outRoot, newOutRel)
+				targetOutPath := filepath.Join(currentOutPath, seg.Rendered)
 				if dry {
 					fmt.Printf("MKDIR %s\n", targetOutPath)
 				} else {
@@ -181,18 +186,12 @@ func processDir(templateRoot string, srcRel string, outRoot string, outRel strin
 						return faults.Wrap(err)
 					}
 					// Track all directories in the path as created by copycat
-					// MkdirAll creates intermediate directories, so we need to track them all
-					currentPath := outRoot
-					pathParts := strings.Split(strings.Trim(newOutRel, string(filepath.Separator)), string(filepath.Separator))
-					for _, part := range pathParts {
-						if part != "" {
-							currentPath = filepath.Join(currentPath, part)
-							createdDirs[currentPath] = struct{}{}
-						}
-					}
+					// Although MkdirAll creates intermediate directories, we are processing depth-first,
+					// so we can track them here as we go down.
+					createdDirs[targetOutPath] = struct{}{}
 				}
 				// Recurse into directory with updated context
-				if err := processDir(templateRoot, filepath.Join(srcRel, name), outRoot, newOutRel, rootModel, seg.Ctx, dry, createdDirs); err != nil {
+				if err := processDir(srcPath, targetOutPath, rootModel, seg.Ctx, dry, createdDirs); err != nil {
 					return faults.Wrap(err)
 				}
 			} else {
@@ -210,8 +209,7 @@ func processDir(templateRoot string, srcRel string, outRoot string, outRel strin
 				if strings.HasSuffix(name, ".tmpl") {
 					outName = strings.TrimSuffix(outName, ".tmpl")
 				}
-				newOutRel := filepath.Join(outRel, outName)
-				targetOutPath := filepath.Join(outRoot, newOutRel)
+				targetOutPath := filepath.Join(currentOutPath, outName)
 
 				// Skip empty files
 				if strings.TrimSpace(rendered) == "" {
@@ -224,22 +222,6 @@ func processDir(templateRoot string, srcRel string, outRoot string, outRel strin
 				if dry {
 					fmt.Printf("WRITE %s (%d bytes)\n", targetOutPath, len(rendered))
 				} else {
-					parentDir := filepath.Dir(targetOutPath)
-					if err := os.MkdirAll(parentDir, 0o755); err != nil {
-						return faults.Wrap(err)
-					}
-					// Track all parent directories as created by copycat
-					currentPath := outRoot
-					relParentPath, err := filepath.Rel(outRoot, parentDir)
-					if err == nil && relParentPath != "." {
-						pathParts := strings.Split(strings.Trim(relParentPath, string(filepath.Separator)), string(filepath.Separator))
-						for _, part := range pathParts {
-							if part != "" {
-								currentPath = filepath.Join(currentPath, part)
-								createdDirs[currentPath] = struct{}{}
-							}
-						}
-					}
 					if err := os.WriteFile(targetOutPath, []byte(rendered), 0o644); err != nil {
 						return faults.Wrap(err)
 					}
