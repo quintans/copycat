@@ -1,4 +1,5 @@
 projectName: MyApp
+hasDb: false
 features:
   - name: auth
     table: auths
