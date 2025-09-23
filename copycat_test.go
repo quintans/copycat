@@ -1,15 +1,23 @@
-package main
+package copycat
 
 import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var customFuncs = map[string]any{
+	"slugify": func(s string) string {
+		// Simple slugify implementation: lower case and replace spaces with underscores
+		return strings.ReplaceAll(strings.ToLower(s), " ", "_")
+	},
+}
 
 func TestProcessDirWithExamples(t *testing.T) {
 	// Load the actual model from examples
@@ -20,23 +28,25 @@ func TestProcessDirWithExamples(t *testing.T) {
 	outFS := afero.NewMemMapFs()
 
 	// Add a file to show its removal
-	err = afero.WriteFile(outFS, "MyApp/empty.txt", []byte("pre-existing content"), 0o644)
+	err = afero.WriteFile(outFS, "my_app/empty.txt", []byte("pre-existing content"), 0o644)
 	require.NoError(t, err)
 
-	cc := CopyCat{
-		model:      model,
-		dryRun:     false,
-		templateFS: afero.NewOsFs(),
-		outputFS:   outFS,
-	}
-	err = cc.ProcessDir("examples/template", "", model)
+	cc, err := NewCopyCat(
+		afero.NewOsFs(),
+		outFS,
+		model,
+		WithCustomFuncs(customFuncs),
+	)
+	require.NoError(t, err)
+
+	err = cc.Run("examples/template", "", false)
 	require.NoError(t, err, "processDir should not fail")
 
 	// Verify expected directory structure
 	expectedDirs := []string{
-		"MyApp",
-		"MyApp/auth",
-		"MyApp/payments",
+		"my_app",
+		"my_app/auth",
+		"my_app/payments",
 	}
 
 	for _, dir := range expectedDirs {
@@ -49,40 +59,42 @@ func TestProcessDirWithExamples(t *testing.T) {
 	expectedFiles := map[string]struct {
 		shouldContain []string
 	}{
-		"MyApp/README.md": {
+		"my_app/README.md": {
 			shouldContain: []string{
-				"MyApp",
+				"My App",
 				"auth",
 				"payments",
 			},
 		},
-		"MyApp/auth/config.txt": {
+		"my_app/auth/config.txt": {
 			shouldContain: []string{
 				"Feature: auth",
-				"Project: MyApp",
+				"Project: My App",
+				"Slug: my_app",
 				"Owner: Alice",
 			},
 		},
-		"MyApp/auth/auth.go": {
+		"my_app/auth/auth.go": {
 			shouldContain: []string{
 				"package auth",
 				"Auto-generated for feature auth",
-				"MyApp",
+				"My App",
 				`return "auths"`,
 			},
 		},
-		"MyApp/payments/config.txt": {
+		"my_app/payments/config.txt": {
 			shouldContain: []string{
 				"Feature: payments",
-				"Project: MyApp",
+				"Project: My App",
+				"Slug: my_app",
 				"Owner: Alice",
 			},
 		},
-		"MyApp/payments/payments.go": {
+		"my_app/payments/payments.go": {
 			shouldContain: []string{
 				"package payments",
 				"Auto-generated for feature payments",
-				"MyApp",
+				"My App",
 				`return "payments"`,
 			},
 		},
@@ -106,9 +118,9 @@ func TestProcessDirWithExamples(t *testing.T) {
 	// Verify no unexpected files or directories were created
 	// empty.txt should not be created as it renders to empty
 	// db.go should not be created as hasDb is false, and consequently neither the gateway folder
-	err = afero.Walk(outFS, "MyApp", func(path string, info fs.FileInfo, err error) error {
+	err = afero.Walk(outFS, "my_app", func(path string, info fs.FileInfo, err error) error {
 		require.NoError(t, err, "error walking path %s", path)
-		relPath, err := filepath.Rel("MyApp", path)
+		relPath, err := filepath.Rel("my_app", path)
 		require.NoError(t, err, "error getting relative path for %s", path)
 		if relPath == "." {
 			return nil // Skip root
@@ -178,7 +190,8 @@ func TestRenderContentWithContext(t *testing.T) {
 func TableName() string { return "{{ .table }}" }`
 
 	cc := CopyCat{
-		model: rootModel,
+		model:       rootModel,
+		customFuncs: customFuncs,
 	}
 	rendered, err := cc.renderContent(template, featureCtx)
 	require.NoError(t, err, "renderContent should not fail")
@@ -195,7 +208,8 @@ func TableName() string { return "auths" }`
 func TestCompleteTemplateExpansion(t *testing.T) {
 	// Test with a more complex model to verify all edge cases
 	complexModel := map[string]any{
-		"projectName": "ComplexApp",
+		"projectName": "Complex App",
+		"projectSlug": "complex_app",
 		"hasDb":       true,
 		"version":     "1.0.0",
 		"features": []any{
@@ -219,21 +233,22 @@ func TestCompleteTemplateExpansion(t *testing.T) {
 	// Create in-memory filesystem to capture outputs
 	outFS := afero.NewMemMapFs()
 
-	cc := CopyCat{
-		model:      complexModel,
-		dryRun:     false,
-		templateFS: afero.NewOsFs(),
-		outputFS:   outFS,
-	}
-	err := cc.ProcessDir("examples/template", "", complexModel)
+	cc, err := NewCopyCat(
+		afero.NewOsFs(),
+		outFS,
+		complexModel,
+	)
+	require.NoError(t, err)
+
+	err = cc.Run("examples/template", "", false)
 	require.NoError(t, err, "processDir should not fail")
 
 	// Should create directories for each feature
 	expectedDirs := []string{
-		"ComplexApp",
-		"ComplexApp/authentication",
-		"ComplexApp/billing",
-		"ComplexApp/gateway", // because hasDb is true
+		"complex_app",
+		"complex_app/authentication",
+		"complex_app/billing",
+		"complex_app/gateway", // because hasDb is true
 	}
 
 	for _, dir := range expectedDirs {
@@ -241,19 +256,19 @@ func TestCompleteTemplateExpansion(t *testing.T) {
 		require.NoError(t, err, "expected directory %s was not created", dir)
 	}
 
-	data, err := afero.ReadFile(outFS, "ComplexApp/authentication/authentication.go")
+	data, err := afero.ReadFile(outFS, "complex_app/authentication/authentication.go")
 	require.NoError(t, err, "failed to read authentication.go")
 	content := string(data)
 	assert.Contains(t, content, "package authentication", "authentication.go should contain package declaration")
 	assert.Contains(t, content, `return "auth_users"`, "authentication.go should contain table name")
 
-	data, err = afero.ReadFile(outFS, "ComplexApp/billing/billing.go")
+	data, err = afero.ReadFile(outFS, "complex_app/billing/billing.go")
 	require.NoError(t, err, "failed to read billing.go")
 	content = string(data)
 	assert.Contains(t, content, "package billing", "billing.go should contain package declaration")
 	assert.Contains(t, content, `return "invoices"`, "billing.go should contain table name")
 
-	data, err = afero.ReadFile(outFS, "ComplexApp/gateway/db.go")
+	data, err = afero.ReadFile(outFS, "complex_app/gateway/db.go")
 	require.NoError(t, err, "failed to read db.go")
 	content = string(data)
 	assert.Contains(t, content, "package gateway", "db.go should contain package declaration")
@@ -331,14 +346,15 @@ func TestDryRunMode(t *testing.T) {
 	require.NoError(t, err, "failed to load model")
 
 	outFS := afero.NewMemMapFs()
+	cc, err := NewCopyCat(
+		afero.NewOsFs(),
+		outFS,
+		model,
+		WithCustomFuncs(customFuncs),
+	)
+	require.NoError(t, err)
 
-	cc := CopyCat{
-		model:      model,
-		dryRun:     true,
-		templateFS: afero.NewOsFs(),
-		outputFS:   outFS,
-	}
-	err = cc.ProcessDir("examples/template", "", model)
+	err = cc.Run("examples/template", "", true)
 	require.NoError(t, err, "ProcessDir should not fail")
 
 	// Check that no files were created
@@ -378,13 +394,14 @@ func TestPreExistingDirectoryPreservation(t *testing.T) {
 
 	// Run copycat
 	model := map[string]any{"projectName": "TestProject"}
-	cc := CopyCat{
-		model:      model,
-		dryRun:     false,
-		templateFS: inFS,
-		outputFS:   outFS,
-	}
-	err = cc.ProcessDir(templateDir, outputDir, model)
+	cc, err := NewCopyCat(
+		inFS,
+		outFS,
+		model,
+	)
+	require.NoError(t, err)
+
+	err = cc.Run(templateDir, outputDir, false)
 	require.NoError(t, err)
 
 	// Verify results:
@@ -410,14 +427,15 @@ func TestPreExistingDirectoryPreservation(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "directory with only empty files should be removed")
 }
 
-func TestRenderModel(t *testing.T) {
+func TestCustomFuncsAndRenderModel(t *testing.T) {
 	model := map[string]any{
 		"projectName": "My App",
-		"projectSlug": `{{ lower .projectName | replace " " "_" }}`,
+		"projectSlug": `{{ .projectName | slugify }}`,
 	}
 
 	cc := CopyCat{
-		model: model,
+		model:       model,
+		customFuncs: customFuncs,
 	}
 	m, err := cc.renderModelValue(model, model)
 	require.NoError(t, err, "renderModel should not fail")

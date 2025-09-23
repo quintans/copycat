@@ -1,3 +1,4 @@
 Feature: {{ .name }}
 Project: {{ root.projectName }}
+Slug: {{ root.projectSlug }}
 Owner: {{ root.owner.name }}

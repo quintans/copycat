@@ -14,7 +14,7 @@ A Go template engine that expands directory structures and files using YAML mode
 ## Installation
 
 ```bash
-go install github.com/quintans/copycat@latest
+go install github.com/quintans/copycat/cmd/copycat@latest
 ```
 
 Or clone and build:
@@ -22,7 +22,7 @@ Or clone and build:
 ```bash
 git clone https://github.com/quintans/copycat.git
 cd copycat
-go build -o copycat main.go
+go build -o copycat cmd/copycat/main.go
 ```
 
 ## Quick Start
@@ -31,7 +31,8 @@ go build -o copycat main.go
 
 ```yaml
 # model.yaml
-projectName: MyApp
+projectName: My App
+projectSlug: "{{ .projectName | slugify }}"
 features:
   - name: auth
     table: users
@@ -45,7 +46,7 @@ owner:
 
 ```
 template/
-└── {{ projectName }}/
+└── {{ projectSlug }}/
     ├── README.md
     └── {{ features.name }}/
         ├── {{ name }}.go.tmpl
@@ -62,7 +63,7 @@ copycat -model model.yaml -template template -out output
 
 ```
 output/
-└── MyApp/
+└── my-app/
     ├── README.md
     ├── auth/
     │   ├── auth.go
@@ -78,7 +79,7 @@ output/
 
 Use `{{ variableName }}` in directory and file names:
 
-- `{{ projectName }}` → expands to scalar value
+- `{{ projectSlug }}` → expands to scalar value (e.g., "my-app")
 - `{{ features.name }}` → creates multiple directories from array
 > NB: `features` is an array that we defined above in the model
 
@@ -97,12 +98,12 @@ func TableName() string {
 }
 ```
 
-> files ctemplates can have the extension `.tmpl`, that will be removed on generation
+> Template files can have the extension `.tmpl`, which will be removed on generation
 
 ### Context Access
 
 - `{{ . }}` - Current context (array element or root model)
-- `{{ (root) }}` - Always accesses the full YAML model
+- `{{ (root) }}` - Always accesses the full model
 - All [Sprig template functions](https://masterminds.github.io/sprig/) available
 
 ## CLI Options
@@ -125,10 +126,20 @@ The `examples/` directory contains a complete working example:
 
 ```bash
 # Preview the example
-go run main.go -model examples/model.yaml -template examples/template -out ./output -dry-run
+copycat -model examples/model.yaml -template examples/template -out ./output -dry-run
 
 # Generate actual files
-go run main.go -model examples/model.yaml -template examples/template -out ./output
+copycat -model examples/model.yaml -template examples/template -out ./output
+```
+
+Or run directly from source:
+
+```bash
+# Preview the example
+go run cmd/copycat/main.go -model examples/model.yaml -template examples/template -out ./output -dry-run
+
+# Generate actual files
+go run cmd/copycat/main.go -model examples/model.yaml -template examples/template -out ./output
 ```
 
 ## Template Features
@@ -168,22 +179,31 @@ Use copycat as a Go library:
 package main
 
 import (
-    "github.com/spf13/afero"
+    "log"
+    
     "github.com/quintans/copycat"
+    "github.com/spf13/afero"
 )
 
 func main() {
-    model := map[string]any{
-        "projectName": "MyApp",
-        "features": []any{
-            map[string]any{"name": "auth"},
-        },
+    // Load model from YAML file
+    model, err := copycat.LoadModel("model.yaml")
+    if err != nil {
+        log.Fatal(err)
     }
     
-    inFS := afero.NewOsFs()
-    outFS := afero.NewOsFs()
+    // Create CopyCat instance
+    cc, err := copycat.NewCopyCat(
+        afero.NewOsFs(), // input filesystem
+        afero.NewOsFs(), // output filesystem
+        model,
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
     
-    err := copycat.ProcessDir(inFS, "template", outFS, "output", model, model, false)
+    // Run template expansion
+    err = cc.Run("template", "output", false) // false = not dry-run
     if err != nil {
         log.Fatal(err)
     }

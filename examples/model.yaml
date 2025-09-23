@@ -1,4 +1,5 @@
-projectName: MyApp
+projectName: My App
+projectSlug: "{{ .projectName | slugify }}"
 hasDb: false
 features:
   - name: auth
