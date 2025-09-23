@@ -32,7 +32,7 @@ go build -o copycat cmd/copycat/main.go
 ```yaml
 # model.yaml
 projectName: My App
-projectSlug: "{{ .projectName | slugify }}"
+projectSlug: "{{ lower .projectName | replace \" \" \"-\" }}"
 features:
   - name: auth
     table: users

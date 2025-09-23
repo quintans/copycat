@@ -209,7 +209,7 @@ func TestCompleteTemplateExpansion(t *testing.T) {
 	// Test with a more complex model to verify all edge cases
 	complexModel := map[string]any{
 		"projectName": "Complex App",
-		"projectSlug": "complex_app",
+		"projectSlug": `{{ lower .projectName | replace " " "_" }}`,
 		"hasDb":       true,
 		"version":     "1.0.0",
 		"features": []any{
