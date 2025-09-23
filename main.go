@@ -42,7 +42,14 @@ func main() {
 		noError(err, "failed to create output dir: %+v", err)
 	}
 
-	err = ProcessDir(afero.NewOsFs(), *templateDir, afero.NewOsFs(), *outputDir, model, model, *dryRun)
+	cc := CopyCat{
+		Model:      model,
+		DryRun:     *dryRun,
+		TemplateFS: afero.NewOsFs(),
+		OutputFS:   afero.NewOsFs(),
+	}
+
+	err = cc.ProcessDir(*templateDir, *outputDir, model)
 	noError(err, "failed to process directory: %+v", err)
 
 	if *dryRun {
@@ -50,6 +57,14 @@ func main() {
 	} else {
 		fmt.Println("Template expansion complete.")
 	}
+}
+
+type CopyCat struct {
+	Model       map[string]any
+	DryRun      bool
+	TemplateFS  afero.Fs
+	OutputFS    afero.Fs
+	CustomFuncs template.FuncMap
 }
 
 // LoadModel reads a YAML file into a map
@@ -69,8 +84,8 @@ func LoadModel(filename string) (map[string]any, error) {
 // ProcessDir processes a template directory and writes output to outFS
 //
 // This function is made public to allow creating other projects to call it directly.
-func ProcessDir(inFS afero.Fs, currentTemplatePath string, outFS afero.Fs, currentOutPath string, model map[string]any, ctx any, dryRun bool) error {
-	entries, err := afero.ReadDir(inFS, currentTemplatePath) // Pre-check to ensure templatePath exists
+func (cc *CopyCat) ProcessDir(currentTemplatePath string, currentOutPath string, ctx any) error {
+	entries, err := afero.ReadDir(cc.TemplateFS, currentTemplatePath) // Pre-check to ensure templatePath exists
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -85,27 +100,27 @@ func ProcessDir(inFS afero.Fs, currentTemplatePath string, outFS afero.Fs, curre
 			outPath := filepath.Join(currentOutPath, item.value)
 
 			if entry.IsDir() {
-				if dryRun {
+				if cc.DryRun {
 					fmt.Printf("[DIR]  %s\n", outPath)
 				} else {
-					if err := outFS.MkdirAll(outPath, 0755); err != nil {
+					if err := cc.OutputFS.MkdirAll(outPath, 0755); err != nil {
 						return faults.Wrap(err)
 					}
 				}
-				err = ProcessDir(inFS, filepath.Join(currentTemplatePath, entry.Name()), outFS, outPath, model, item.ctx, dryRun)
+				err = cc.ProcessDir(filepath.Join(currentTemplatePath, entry.Name()), outPath, item.ctx)
 				if err != nil {
 					return faults.Wrap(err)
 				}
 
 				// After processing the directory, check if it is empty and remove if so
 				// We do this here to avoid removing directories that were not created by copycat
-				if !dryRun {
-					subEntries, err := afero.ReadDir(outFS, outPath)
+				if !cc.DryRun {
+					subEntries, err := afero.ReadDir(cc.OutputFS, outPath)
 					if err != nil {
 						return faults.Wrap(err)
 					}
 					if len(subEntries) == 0 {
-						if err := outFS.Remove(outPath); err != nil {
+						if err := cc.OutputFS.Remove(outPath); err != nil {
 							return faults.Wrap(err)
 						}
 					}
@@ -114,28 +129,28 @@ func ProcessDir(inFS afero.Fs, currentTemplatePath string, outFS afero.Fs, curre
 				continue
 			}
 
-			data, err := afero.ReadFile(inFS, filepath.Join(currentTemplatePath, entry.Name()))
+			data, err := afero.ReadFile(cc.TemplateFS, filepath.Join(currentTemplatePath, entry.Name()))
 			if err != nil {
 				return faults.Wrap(err)
 			}
 
-			content, err := renderContent(string(data), model, item.ctx)
+			content, err := cc.renderContent(string(data), item.ctx)
 			if err != nil {
 				return faults.Wrap(err)
 			}
 
 			if content == "" {
-				if dryRun {
+				if cc.DryRun {
 					fmt.Printf("[SKIP] %s (empty after rendering)\n", outPath)
 				}
 				// if the file exists from a previous run, remove it
-				if !dryRun {
-					if exists, err := afero.Exists(outFS, outPath); exists {
+				if !cc.DryRun {
+					if exists, err := afero.Exists(cc.OutputFS, outPath); exists {
 						if err != nil {
 							return faults.Wrap(err)
 						}
 						// Remove the existing file
-						if err = outFS.Remove(outPath); err != nil {
+						if err = cc.OutputFS.Remove(outPath); err != nil {
 							return faults.Wrap(err)
 						}
 					}
@@ -145,12 +160,12 @@ func ProcessDir(inFS afero.Fs, currentTemplatePath string, outFS afero.Fs, curre
 			}
 
 			outPath = strings.TrimSuffix(outPath, ".tmpl")
-			if dryRun {
+			if cc.DryRun {
 				fmt.Printf("[FILE] %s (%d bytes)\n", outPath, len(content))
 				continue
 			}
 			// Write the rendered content to the output file
-			if err := afero.WriteFile(outFS, outPath, []byte(content), 0755); err != nil {
+			if err := afero.WriteFile(cc.OutputFS, outPath, []byte(content), 0755); err != nil {
 				return faults.Wrap(err)
 			}
 		}
@@ -253,10 +268,14 @@ func isScalar(v any) bool {
 
 // renderContent renders the file content template using Go text/template with sprig.
 // Data model: . is the current context; root is the root model;
-func renderContent(content string, rootModel map[string]any, ctx any) (string, error) {
+func (cc *CopyCat) renderContent(content string, ctx any) (string, error) {
 	funcs := sprig.TxtFuncMap()
 	// helper funcs to access root/current contexts regardless of dot
-	funcs["root"] = func() any { return rootModel }
+	funcs["root"] = func() any { return cc.Model }
+	// apply custom funcs if any
+	for k, v := range cc.CustomFuncs {
+		funcs[k] = v
+	}
 	t, err := template.New("file").Funcs(funcs).Option("missingkey=error").Parse(content)
 	if err != nil {
 		return "", faults.Wrap(err)

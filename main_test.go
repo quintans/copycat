@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -24,7 +23,13 @@ func TestProcessDirWithExamples(t *testing.T) {
 	err = afero.WriteFile(outFS, "MyApp/empty.txt", []byte("pre-existing content"), 0o644)
 	require.NoError(t, err)
 
-	err = ProcessDir(afero.NewOsFs(), "examples/template", outFS, "", model, model, false)
+	cc := CopyCat{
+		Model:      model,
+		DryRun:     false,
+		TemplateFS: afero.NewOsFs(),
+		OutputFS:   outFS,
+	}
+	err = cc.ProcessDir("examples/template", "", model)
 	require.NoError(t, err, "processDir should not fail")
 
 	// Verify expected directory structure
@@ -108,7 +113,6 @@ func TestProcessDirWithExamples(t *testing.T) {
 		if relPath == "." {
 			return nil // Skip root
 		}
-		fmt.Println("===> ", path)
 		if info.IsDir() {
 			assert.Contains(t, expectedDirs, path, "unexpected directory created: %s", path)
 		} else {
@@ -173,7 +177,10 @@ func TestRenderContentWithContext(t *testing.T) {
 
 func TableName() string { return "{{ .table }}" }`
 
-	rendered, err := renderContent(template, rootModel, featureCtx)
+	cc := CopyCat{
+		Model: rootModel,
+	}
+	rendered, err := cc.renderContent(template, featureCtx)
 	require.NoError(t, err, "renderContent should not fail")
 
 	expected := `package auth
@@ -212,7 +219,13 @@ func TestCompleteTemplateExpansion(t *testing.T) {
 	// Create in-memory filesystem to capture outputs
 	outFS := afero.NewMemMapFs()
 
-	err := ProcessDir(afero.NewOsFs(), "examples/template", outFS, "", complexModel, complexModel, false)
+	cc := CopyCat{
+		Model:      complexModel,
+		DryRun:     false,
+		TemplateFS: afero.NewOsFs(),
+		OutputFS:   outFS,
+	}
+	err := cc.ProcessDir("examples/template", "", complexModel)
 	require.NoError(t, err, "processDir should not fail")
 
 	// Should create directories for each feature
@@ -302,7 +315,10 @@ func TestTemplateHelperFunctions(t *testing.T) {
 
 	// Test root helper function
 	template := "Project: {{ root.projectName }}, Feature: {{ .name }}"
-	rendered, err := renderContent(template, rootModel, ctx)
+	cc := CopyCat{
+		Model: rootModel,
+	}
+	rendered, err := cc.renderContent(template, ctx)
 	require.NoError(t, err, "renderContent should not fail")
 
 	expected := "Project: HelperTest, Feature: feature1"
@@ -316,7 +332,13 @@ func TestDryRunMode(t *testing.T) {
 
 	outFS := afero.NewMemMapFs()
 
-	err = ProcessDir(afero.NewOsFs(), "examples/template", outFS, "", model, model, true)
+	cc := CopyCat{
+		Model:      model,
+		DryRun:     true,
+		TemplateFS: afero.NewOsFs(),
+		OutputFS:   outFS,
+	}
+	err = cc.ProcessDir("examples/template", "", model)
 	require.NoError(t, err, "ProcessDir should not fail")
 
 	// Check that no files were created
@@ -356,7 +378,13 @@ func TestPreExistingDirectoryPreservation(t *testing.T) {
 
 	// Run copycat
 	model := map[string]any{"projectName": "TestProject"}
-	err = ProcessDir(inFS, templateDir, outFS, outputDir, model, model, false)
+	cc := CopyCat{
+		Model:      model,
+		DryRun:     false,
+		TemplateFS: inFS,
+		OutputFS:   outFS,
+	}
+	err = cc.ProcessDir(templateDir, outputDir, model)
 	require.NoError(t, err)
 
 	// Verify results:
