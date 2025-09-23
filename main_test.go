@@ -24,10 +24,10 @@ func TestProcessDirWithExamples(t *testing.T) {
 	require.NoError(t, err)
 
 	cc := CopyCat{
-		Model:      model,
-		DryRun:     false,
-		TemplateFS: afero.NewOsFs(),
-		OutputFS:   outFS,
+		model:      model,
+		dryRun:     false,
+		templateFS: afero.NewOsFs(),
+		outputFS:   outFS,
 	}
 	err = cc.ProcessDir("examples/template", "", model)
 	require.NoError(t, err, "processDir should not fail")
@@ -178,7 +178,7 @@ func TestRenderContentWithContext(t *testing.T) {
 func TableName() string { return "{{ .table }}" }`
 
 	cc := CopyCat{
-		Model: rootModel,
+		model: rootModel,
 	}
 	rendered, err := cc.renderContent(template, featureCtx)
 	require.NoError(t, err, "renderContent should not fail")
@@ -220,10 +220,10 @@ func TestCompleteTemplateExpansion(t *testing.T) {
 	outFS := afero.NewMemMapFs()
 
 	cc := CopyCat{
-		Model:      complexModel,
-		DryRun:     false,
-		TemplateFS: afero.NewOsFs(),
-		OutputFS:   outFS,
+		model:      complexModel,
+		dryRun:     false,
+		templateFS: afero.NewOsFs(),
+		outputFS:   outFS,
 	}
 	err := cc.ProcessDir("examples/template", "", complexModel)
 	require.NoError(t, err, "processDir should not fail")
@@ -316,7 +316,7 @@ func TestTemplateHelperFunctions(t *testing.T) {
 	// Test root helper function
 	template := "Project: {{ root.projectName }}, Feature: {{ .name }}"
 	cc := CopyCat{
-		Model: rootModel,
+		model: rootModel,
 	}
 	rendered, err := cc.renderContent(template, ctx)
 	require.NoError(t, err, "renderContent should not fail")
@@ -333,10 +333,10 @@ func TestDryRunMode(t *testing.T) {
 	outFS := afero.NewMemMapFs()
 
 	cc := CopyCat{
-		Model:      model,
-		DryRun:     true,
-		TemplateFS: afero.NewOsFs(),
-		OutputFS:   outFS,
+		model:      model,
+		dryRun:     true,
+		templateFS: afero.NewOsFs(),
+		outputFS:   outFS,
 	}
 	err = cc.ProcessDir("examples/template", "", model)
 	require.NoError(t, err, "ProcessDir should not fail")
@@ -379,10 +379,10 @@ func TestPreExistingDirectoryPreservation(t *testing.T) {
 	// Run copycat
 	model := map[string]any{"projectName": "TestProject"}
 	cc := CopyCat{
-		Model:      model,
-		DryRun:     false,
-		TemplateFS: inFS,
-		OutputFS:   outFS,
+		model:      model,
+		dryRun:     false,
+		templateFS: inFS,
+		outputFS:   outFS,
 	}
 	err = cc.ProcessDir(templateDir, outputDir, model)
 	require.NoError(t, err)
@@ -408,4 +408,21 @@ func TestPreExistingDirectoryPreservation(t *testing.T) {
 	// 3. Directory that would only contain empty files should be removed
 	_, err = outFS.Stat(filepath.Join(outputDir, "TestProject", "newdir"))
 	assert.True(t, os.IsNotExist(err), "directory with only empty files should be removed")
+}
+
+func TestRenderModel(t *testing.T) {
+	model := map[string]any{
+		"projectName": "My App",
+		"projectSlug": `{{ lower .projectName | replace " " "_" }}`,
+	}
+
+	cc := CopyCat{
+		model: model,
+	}
+	m, err := cc.renderModelValue(model, model)
+	require.NoError(t, err, "renderModel should not fail")
+	model = m.(map[string]any)
+
+	assert.Equal(t, "My App", model["projectName"], "projectName should remain unchanged")
+	assert.Equal(t, "my_app", model["projectSlug"], "projectSlug should be rendered correctly")
 }

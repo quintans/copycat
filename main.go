@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,12 +43,13 @@ func main() {
 		noError(err, "failed to create output dir: %+v", err)
 	}
 
-	cc := CopyCat{
-		Model:      model,
-		DryRun:     *dryRun,
-		TemplateFS: afero.NewOsFs(),
-		OutputFS:   afero.NewOsFs(),
-	}
+	cc, err := NewCopyCat(
+		afero.NewOsFs(),
+		afero.NewOsFs(),
+		model,
+		WithDryRun(*dryRun),
+	)
+	noError(err, "failed to create CopyCat: %+v", err)
 
 	err = cc.ProcessDir(*templateDir, *outputDir, model)
 	noError(err, "failed to process directory: %+v", err)
@@ -57,14 +59,6 @@ func main() {
 	} else {
 		fmt.Println("Template expansion complete.")
 	}
-}
-
-type CopyCat struct {
-	Model       map[string]any
-	DryRun      bool
-	TemplateFS  afero.Fs
-	OutputFS    afero.Fs
-	CustomFuncs template.FuncMap
 }
 
 // LoadModel reads a YAML file into a map
@@ -81,11 +75,82 @@ func LoadModel(filename string) (map[string]any, error) {
 	return model, nil
 }
 
+type CopyCat struct {
+	templateFS  afero.Fs
+	outputFS    afero.Fs
+	model       map[string]any
+	customFuncs template.FuncMap
+	dryRun      bool
+}
+
+type Option func(*CopyCat)
+
+func WithCustomFuncs(funcs template.FuncMap) Option {
+	return func(cc *CopyCat) {
+		cc.customFuncs = funcs
+	}
+}
+
+func WithDryRun(dryRun bool) Option {
+	return func(cc *CopyCat) {
+		cc.dryRun = dryRun
+	}
+}
+
+func NewCopyCat(templateFS, outputFS afero.Fs, model map[string]any, options ...Option) (*CopyCat, error) {
+	cc := &CopyCat{
+		model:      model,
+		templateFS: templateFS,
+		outputFS:   outputFS,
+	}
+	for _, opt := range options {
+		opt(cc)
+	}
+
+	m, err := cc.renderModelValue(model, model)
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
+	// if it fails casting, something is very wrong
+	cc.model = m.(map[string]any)
+
+	return cc, nil
+}
+
+func (cc *CopyCat) renderModelValue(parent, value any) (any, error) {
+	switch v := value.(type) {
+	case string:
+		return cc.renderContent(v, parent)
+	case map[string]any:
+		newMap := make(map[string]any, len(v))
+		for mk, mv := range v {
+			renderedVal, err := cc.renderModelValue(v, mv)
+			if err != nil {
+				return nil, faults.Wrap(err)
+			}
+			newMap[mk] = renderedVal
+		}
+		return newMap, nil
+	case []any:
+		newArr := make([]any, len(v))
+		for k, item := range v {
+			renderedItem, err := cc.renderModelValue(v, item)
+			if err != nil {
+				return nil, faults.Wrap(err)
+			}
+			newArr[k] = renderedItem
+		}
+		return newArr, nil
+	default:
+		return v, nil
+	}
+}
+
 // ProcessDir processes a template directory and writes output to outFS
 //
 // This function is made public to allow creating other projects to call it directly.
 func (cc *CopyCat) ProcessDir(currentTemplatePath string, currentOutPath string, ctx any) error {
-	entries, err := afero.ReadDir(cc.TemplateFS, currentTemplatePath) // Pre-check to ensure templatePath exists
+	entries, err := afero.ReadDir(cc.templateFS, currentTemplatePath) // Pre-check to ensure templatePath exists
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -100,10 +165,10 @@ func (cc *CopyCat) ProcessDir(currentTemplatePath string, currentOutPath string,
 			outPath := filepath.Join(currentOutPath, item.value)
 
 			if entry.IsDir() {
-				if cc.DryRun {
+				if cc.dryRun {
 					fmt.Printf("[DIR]  %s\n", outPath)
 				} else {
-					if err := cc.OutputFS.MkdirAll(outPath, 0755); err != nil {
+					if err := cc.outputFS.MkdirAll(outPath, 0755); err != nil {
 						return faults.Wrap(err)
 					}
 				}
@@ -114,13 +179,13 @@ func (cc *CopyCat) ProcessDir(currentTemplatePath string, currentOutPath string,
 
 				// After processing the directory, check if it is empty and remove if so
 				// We do this here to avoid removing directories that were not created by copycat
-				if !cc.DryRun {
-					subEntries, err := afero.ReadDir(cc.OutputFS, outPath)
+				if !cc.dryRun {
+					subEntries, err := afero.ReadDir(cc.outputFS, outPath)
 					if err != nil {
 						return faults.Wrap(err)
 					}
 					if len(subEntries) == 0 {
-						if err := cc.OutputFS.Remove(outPath); err != nil {
+						if err := cc.outputFS.Remove(outPath); err != nil {
 							return faults.Wrap(err)
 						}
 					}
@@ -129,7 +194,7 @@ func (cc *CopyCat) ProcessDir(currentTemplatePath string, currentOutPath string,
 				continue
 			}
 
-			data, err := afero.ReadFile(cc.TemplateFS, filepath.Join(currentTemplatePath, entry.Name()))
+			data, err := afero.ReadFile(cc.templateFS, filepath.Join(currentTemplatePath, entry.Name()))
 			if err != nil {
 				return faults.Wrap(err)
 			}
@@ -140,17 +205,17 @@ func (cc *CopyCat) ProcessDir(currentTemplatePath string, currentOutPath string,
 			}
 
 			if content == "" {
-				if cc.DryRun {
+				if cc.dryRun {
 					fmt.Printf("[SKIP] %s (empty after rendering)\n", outPath)
 				}
 				// if the file exists from a previous run, remove it
-				if !cc.DryRun {
-					if exists, err := afero.Exists(cc.OutputFS, outPath); exists {
+				if !cc.dryRun {
+					if exists, err := afero.Exists(cc.outputFS, outPath); exists {
 						if err != nil {
 							return faults.Wrap(err)
 						}
 						// Remove the existing file
-						if err = cc.OutputFS.Remove(outPath); err != nil {
+						if err = cc.outputFS.Remove(outPath); err != nil {
 							return faults.Wrap(err)
 						}
 					}
@@ -160,12 +225,12 @@ func (cc *CopyCat) ProcessDir(currentTemplatePath string, currentOutPath string,
 			}
 
 			outPath = strings.TrimSuffix(outPath, ".tmpl")
-			if cc.DryRun {
+			if cc.dryRun {
 				fmt.Printf("[FILE] %s (%d bytes)\n", outPath, len(content))
 				continue
 			}
 			// Write the rendered content to the output file
-			if err := afero.WriteFile(cc.OutputFS, outPath, []byte(content), 0755); err != nil {
+			if err := afero.WriteFile(cc.outputFS, outPath, []byte(content), 0755); err != nil {
 				return faults.Wrap(err)
 			}
 		}
@@ -271,11 +336,9 @@ func isScalar(v any) bool {
 func (cc *CopyCat) renderContent(content string, ctx any) (string, error) {
 	funcs := sprig.TxtFuncMap()
 	// helper funcs to access root/current contexts regardless of dot
-	funcs["root"] = func() any { return cc.Model }
+	funcs["root"] = func() any { return cc.model }
 	// apply custom funcs if any
-	for k, v := range cc.CustomFuncs {
-		funcs[k] = v
-	}
+	maps.Copy(funcs, cc.customFuncs)
 	t, err := template.New("file").Funcs(funcs).Option("missingkey=error").Parse(content)
 	if err != nil {
 		return "", faults.Wrap(err)
